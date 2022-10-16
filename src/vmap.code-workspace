@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		}
+	],
+	"settings": {
+		"files.associations": {
+			"main.c": "c",
+			"crt0.S" : "c",
+		}
+	}
+}
