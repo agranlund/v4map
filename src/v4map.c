@@ -134,7 +134,9 @@ int main(int argc, char** argv) {
 	Fclose(f);
 
 	// atari or amiga rom?
-	tosrom = (*((uint32*)&buf[258]) == 'ETOS') ? 1 : -1;
+	uint32 offs_tos = *((uint32*)(buf+4)) & 0x0000FFFF;
+	uint32 offs_magic = offs_tos + 48;
+	tosrom = (*((uint32*)&buf[offs_magic]) == 'ETOS') ? 1 : 0;
 
 	// prevent infinite reset loop when mapping emutos through auto folder
 	if (tosrom && 
