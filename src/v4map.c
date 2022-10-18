@@ -60,7 +60,9 @@ static inline void V4RomCtrl(uint16 r) {
 	);	
 }
 
-static void StopEverything() {
+void ExecuteRom()
+{
+	// stop everything
 	*((volatile uint16*)0xdff096) = 0x7FFF;		// disable dma
 	*((volatile uint16*)0xdff09a) = 0x7FFF;		// disable interrupts
 	*((volatile uint16*)0xdff09c) = 0x0000;		// clear pending
@@ -70,25 +72,29 @@ static void StopEverything() {
 	*((volatile uint16*)0xdff1f4) = 0;			// disable saga video
 	SetSR(0x2700);								// disable autovector interrupts
 	SetVBR(0);									// restore vbr
-}
 
-static void CopyRomInPlace() {
+	// copy rom in place
 	V4RomCtrl(0xB00B);				// maprom and writeprotect off
 	memcpy((uint32*)V4_EXP_MAPPED, (uint32*)buf, KB512);
 	memcpy((uint32*)V4_EXP_DIRECT, (uint32*)buf, KB512);
 	memcpy((uint32*)V4_ROM_MAPPED, (uint32*)(buf + KB512), KB512);
 	memcpy((uint32*)V4_ROM_DIRECT, (uint32*)(buf + KB512), KB512);
 	V4RomCtrl(0x0001);				// maprom and writeprotect on
-}
 
-void ExecuteAmigaRom()
-{
-	StopEverything();
-	CopyRomInPlace();
+	// kill magics
+	if (tosrom) {
+		*((volatile uint32*)0x426) = 0;		// resvalid
+		*((volatile uint32*)0x420) = 0;		// memvalid
+		*((volatile uint32*)0x5a8) = 0;		// ramvalid
+		*((volatile uint32*)0x6fc) = 0;		// warm_magic
+	} else {
+		*((volatile uint32*)0x4) = 0;		// exec
+	}
+
+	// reset
 	__asm__ volatile (
 		".balign 4\n\r"
 		"	nop\n\t"
-		"	move.l	#0,0x4\n\t"			// kill kickstart
 		"	lea.l	0x01000000,a0\n\t"
 		"	sub.l	-0x14(a0),a0\n\t"
 		"	move.l	4(a0),a0\n\t"
@@ -101,30 +107,6 @@ void ExecuteAmigaRom()
 		"	nop\n\t"
 	: : : "a0", "cc");
 }
-
-void ExecuteAtariRom()
-{
-	StopEverything();
-	*((volatile uint32*)0x0) = *((uint32*)&buf[214]);
-	*((volatile uint32*)0x4) = *((uint32*)&buf[218]);
-	CopyRomInPlace();
-	__asm__ volatile (
-		".balign 4\n\r"
-		"	nop\n\t"
-		"	move.l	#0,0x426\n\t"		// resvalid
-		"	move.l	#0,0x420\n\t"		// memvalid
-		"	move.l	#0,0x5a8\n\t"		// ramvalid
-		"	move.l	#0,0x6fc\n\t"		// warm_magic
-		"	move.l	0x4,a0\n\r"
-		"	reset\n\t"
-		"	jmp		(a0)\n\t"
-		"	nop\n\t"
-		"	nop\n\t"
-		"	nop\n\t"
-		"	nop\n\t"
-	: : : "a0", "cc");
-}
-
 
 int main(int argc, char** argv) {
 
@@ -169,7 +151,7 @@ int main(int argc, char** argv) {
 		memcpy((uint32*)(buf + KB512), (uint32*)buf, KB512);
 	}
 
-	Supexec(tosrom > 0 ? ExecuteAtariRom : ExecuteAmigaRom);
+	Supexec(ExecuteRom);
 	__builtin_unreachable;
 }
 
