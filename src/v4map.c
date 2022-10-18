@@ -23,15 +23,25 @@ typedef unsigned short	uint16;
 typedef signed int		int32;
 typedef unsigned int	uint32;
 
+int32 tosrom = 0;
 const uint32 stksize = STACK_SIZE;
 const char* argv0 = BUILD_BIN;
 uint8 buf[KB1024];
 
-static void memcpy(uint8* dst, uint8* src, uint32 size) {
+static void memcpy(uint32* dst, uint32* src, uint32 size) {
 	while (size) {
 		*dst++ = *src++;
-		size--;
+		size-=4;
 	}
+}
+
+static char equal(uint32* dst, uint32* src, uint32 size) {
+	while (size) {
+		if (*dst++ != *src++)
+			return 0;
+		size-=4;
+	}
+	return 1;
 }
 
 static inline void SetSR(uint16 r) {
@@ -50,9 +60,7 @@ static inline void V4RomCtrl(uint16 r) {
 	);	
 }
 
-void ExecuteRom()
-{
-	// stop everything
+static void StopEverything() {
 	*((volatile uint16*)0xdff096) = 0x7FFF;		// disable dma
 	*((volatile uint16*)0xdff09a) = 0x7FFF;		// disable interrupts
 	*((volatile uint16*)0xdff09c) = 0x0000;		// clear pending
@@ -62,25 +70,52 @@ void ExecuteRom()
 	*((volatile uint16*)0xdff1f4) = 0;			// disable saga video
 	SetSR(0x2700);								// disable autovector interrupts
 	SetVBR(0);									// restore vbr
-	*((volatile uint32*)0x4) = 0;				// kill exec (AmigaOS)
-	*((volatile uint32*)0x420) = 0;				// kill memvalid (TOS)
-	*((volatile uint32*)0x426) = 0;				// kill resvalid (TOS)
+}
 
-	// copy rom in place
-	V4RomCtrl(0xB00B);							// maprom and writeprotect off
-	memcpy((void*)V4_EXP_MAPPED, buf, KB512);
-	memcpy((void*)V4_EXP_DIRECT, buf, KB512);
-	memcpy((void*)V4_ROM_MAPPED, buf + KB512, KB512);
-	memcpy((void*)V4_ROM_DIRECT, buf + KB512, KB512);
-	V4RomCtrl(0x0001);							// maprom and writeprotect on
+static void CopyRomInPlace() {
+	V4RomCtrl(0xB00B);				// maprom and writeprotect off
+	memcpy((uint32*)V4_EXP_MAPPED, (uint32*)buf, KB512);
+	memcpy((uint32*)V4_EXP_DIRECT, (uint32*)buf, KB512);
+	memcpy((uint32*)V4_ROM_MAPPED, (uint32*)(buf + KB512), KB512);
+	memcpy((uint32*)V4_ROM_DIRECT, (uint32*)(buf + KB512), KB512);
+	V4RomCtrl(0x0001);				// maprom and writeprotect on
+}
 
-	// reset
+void ExecuteAmigaRom()
+{
+	StopEverything();
+	CopyRomInPlace();
 	__asm__ volatile (
 		".balign 4\n\r"
+		"	nop\n\t"
+		"	move.l	#0,0x4\n\t"			// kill kickstart
 		"	lea.l	0x01000000,a0\n\t"
 		"	sub.l	-0x14(a0),a0\n\t"
 		"	move.l	4(a0),a0\n\t"
 		"	subq.l	#2,a0\n\t"
+		"	reset\n\t"
+		"	jmp		(a0)\n\t"
+		"	nop\n\t"
+		"	nop\n\t"
+		"	nop\n\t"
+		"	nop\n\t"
+	: : : "a0", "cc");
+}
+
+void ExecuteAtariRom()
+{
+	StopEverything();
+	*((volatile uint32*)0x0) = *((uint32*)&buf[214]);
+	*((volatile uint32*)0x4) = *((uint32*)&buf[218]);
+	CopyRomInPlace();
+	__asm__ volatile (
+		".balign 4\n\r"
+		"	nop\n\t"
+		"	move.l	#0,0x426\n\t"		// resvalid
+		"	move.l	#0,0x420\n\t"		// memvalid
+		"	move.l	#0,0x5a8\n\t"		// ramvalid
+		"	move.l	#0,0x6fc\n\t"		// warm_magic
+		"	move.l	0x4,a0\n\r"
 		"	reset\n\t"
 		"	jmp		(a0)\n\t"
 		"	nop\n\t"
@@ -116,15 +151,25 @@ int main(int argc, char** argv) {
 	}
 	Fclose(f);
 
-	// fill regions
-	if (size < KB512) {
-		memcpy(buf + KB256, buf, KB256);
-	}
-	if (size < KB1024) {
-		memcpy(buf + KB512, buf, KB512);
+	// atari or amiga rom?
+	tosrom = (*((uint32*)&buf[258]) == 'ETOS') ? 1 : -1;
+
+	// prevent infinite reset loop when mapping emutos through auto folder
+	if (tosrom && 
+		equal((uint32*)V4_ROM_MAPPED, (uint32*)buf, size) &&
+		equal((uint32*)V4_ROM_DIRECT, (uint32*)buf, size)) {
+		return 0;
 	}
 
-	Supexec(ExecuteRom);
+	// fill regions
+	if (size < KB512) {
+		memcpy((uint32*)(buf + KB256), (uint32*)buf, KB256);
+	}
+	if (size < KB1024) {
+		memcpy((uint32*)(buf + KB512), (uint32*)buf, KB512);
+	}
+
+	Supexec(tosrom > 0 ? ExecuteAtariRom : ExecuteAmigaRom);
 	__builtin_unreachable;
 }
 
