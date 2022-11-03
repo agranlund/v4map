@@ -11,6 +11,7 @@
 #define V4_EXP_MAPPED	0x0FE00000
 
 #define KB256			(1024L * 256L)
+#define KB480			(1024L * 480L)
 #define KB512			(1024L * 512L)
 #define KB1024			(1024L * 1024L)
 
@@ -23,12 +24,11 @@ typedef unsigned short	uint16;
 typedef signed int		int32;
 typedef unsigned int	uint32;
 
-int32 tosrom = 0;
 const uint32 stksize = STACK_SIZE;
 const char* argv0 = BUILD_BIN;
 uint8 buf[KB1024];
 
-static void memcpy(uint32* dst, uint32* src, uint32 size) {
+static void copy(uint32* dst, uint32* src, uint32 size) {
 	while (size) {
 		*dst++ = *src++;
 		size-=4;
@@ -75,21 +75,18 @@ void ExecuteRom()
 
 	// copy rom in place
 	V4RomCtrl(0xB00B);				// maprom and writeprotect off
-	memcpy((uint32*)V4_EXP_MAPPED, (uint32*)buf, KB512);
-	memcpy((uint32*)V4_EXP_DIRECT, (uint32*)buf, KB512);
-	memcpy((uint32*)V4_ROM_MAPPED, (uint32*)(buf + KB512), KB512);
-	memcpy((uint32*)V4_ROM_DIRECT, (uint32*)(buf + KB512), KB512);
+	copy((uint32*)V4_EXP_MAPPED, (uint32*)buf, KB512);
+	copy((uint32*)V4_EXP_DIRECT, (uint32*)buf, KB512);
+	copy((uint32*)V4_ROM_MAPPED, (uint32*)(buf + KB512), KB512);
+	copy((uint32*)V4_ROM_DIRECT, (uint32*)(buf + KB512), KB512);
 	V4RomCtrl(0x0001);				// maprom and writeprotect on
 
-	// kill magics
-	if (tosrom) {
-		*((volatile uint32*)0x426) = 0;		// resvalid
-		*((volatile uint32*)0x420) = 0;		// memvalid
-		*((volatile uint32*)0x5a8) = 0;		// ramvalid
-		*((volatile uint32*)0x6fc) = 0;		// warm_magic
-	} else {
-		*((volatile uint32*)0x4) = 0;		// exec
-	}
+	// magics
+	*((volatile uint32*)0x4) = 0;		// exec
+	*((volatile uint32*)0x426) = 0;		// resvalid
+	*((volatile uint32*)0x420) = 0;		// memvalid
+	*((volatile uint32*)0x5a8) = 0;		// ramvalid
+	*((volatile uint32*)0x6fc) = 0;		// warm_magic
 
 	// reset
 	__asm__ volatile (
@@ -133,24 +130,24 @@ int main(int argc, char** argv) {
 	}
 	Fclose(f);
 
-	// atari or amiga rom?
-	uint32 offs_tos = *((uint32*)(buf+4)) & 0x0000FFFF;
-	uint32 offs_magic = offs_tos + 48;
-	tosrom = (*((uint32*)&buf[offs_magic]) == 'ETOS') ? 1 : 0;
-
 	// prevent infinite reset loop when mapping emutos through auto folder
-	if (tosrom && 
-		equal((uint32*)V4_ROM_MAPPED, (uint32*)buf, size) &&
-		equal((uint32*)V4_ROM_DIRECT, (uint32*)buf, size)) {
-		return 0;
+	if (size < KB1024)
+	{
+		// limit comparison size to max 480kb in an attempt to future proofing
+		// for if/when we get some way of "unlocking" the atari hw register region.
+		// In that case the maximum rom size would be 480kb (f80000-ff7fff)
+		int32 cmpsize = (size > KB480) ? KB480 : size;
+		if (equal((uint32*)(V4_ROM_DIRECT+8), (uint32*)(buf+8), cmpsize-8)) {
+			return 0;
+		}
 	}
 
 	// fill regions
 	if (size < KB512) {
-		memcpy((uint32*)(buf + KB256), (uint32*)buf, KB256);
+		copy((uint32*)(buf + KB256), (uint32*)buf, KB256);
 	}
 	if (size < KB1024) {
-		memcpy((uint32*)(buf + KB512), (uint32*)buf, KB512);
+		copy((uint32*)(buf + KB512), (uint32*)buf, KB512);
 	}
 
 	Supexec(ExecuteRom);
